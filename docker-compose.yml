@@ -1,6 +1,17 @@
 version: '2'
 
 services:
+  traefik:
+    image: traefik:latest
+    volumes:
+      - ./traefik.yml:/traefik.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    ports:
+      - 80:80
+      - 443:443
+    restart: always
+    networks:
+      - default
 
   memcache:
     image: memcached:alpine
@@ -41,39 +52,78 @@ services:
         aliases:
           - redis
 
-  pub:
-    build: ./push
-    container_name: bxPushPub
-    env_file:
-      - .bitrix.env
-    environment:
-      - PUSHROLE=pub
-    volumes:
-      - ${BX_LOGS_PATH}/push-server:/var/log/push-server
-    depends_on:
-      - redis
-    restart: always
-    networks:
-      bx:
-        aliases:
-          - pub
+#  pub:
+#    build: ./push
+#    container_name: bxPushPub
+#    env_file:
+#      - .bitrix.env
+#    environment:
+#      - PUSHROLE=pub
+#    volumes:
+#      - ${BX_LOGS_PATH}/push-server:/var/log/push-server
+#    depends_on:
+#      - redis
+#    restart: always
+#    networks:
+#      bx:
+#        aliases:
+#          - pub
 
-  sub:
-    build: ./push
-    container_name: bxPushSub
-    env_file:
-      - .bitrix.env
-    environment:
-      - PUSHROLE=sub
-    volumes:
-      - ${BX_LOGS_PATH}/push-server:/var/log/push-server
-    depends_on:
+#  sub:
+#    build: ./push
+#    container_name: bxPushSub
+#    env_file:
+#      - .bitrix.env
+#    environment:
+#      - PUSHROLE=sub
+#    volumes:
+#      - ${BX_LOGS_PATH}/push-server:/var/log/push-server
+#    depends_on:
+#      - redis
+#    restart: always
+#    networks:
+#      bx:
+#        aliases:
+#          - sub
+
+  push-server-sub:
+    image: ikarpovich/bitrix-push-server
+    links:
       - redis
-    restart: always
+    networks:
+      - bx
+      - default
+    environment:
+      - REDIS_HOST=redis
+      - LISTEN_HOSTNAME=0.0.0.0
+      - LISTEN_PORT=80
+      - SECURITY_KEY=EnuC6UFy3XIAvHDVXT4fketNANK1yfP65MaehStsNqyd9wVxSeFqt2sAQK9Tm3ECuUu2FmjlENoUtmZRiB5KzhOz3LLonOKKdzG6CvXCMDFg0ZPFRQzJfUlw88PE0l4n
+      - MODE=sub
+    restart: unless-stopped
+    depends_on:
+      - traefik
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.nginx-dev2.rule=Host(`bitrix24-sub.docker.localhost`)"
+      - "traefik.http.services.nginx-dev2.loadbalancer.server.port=80"
+      #- "traefik.http.routers.nginx-dev2.tls=true"
+      - "traefik.docker.network=traefik-net"
+
+  push-server-pub:
+    image: ikarpovich/bitrix-push-server
+    links:
+      - redis
     networks:
       bx:
         aliases:
-          - sub
+          - push-server-pub
+    environment:
+      - REDIS_HOST=redis
+      - LISTEN_HOSTNAME=0.0.0.0
+      - LISTEN_PORT=80
+      - SECURITY_KEY=EnuC6UFy3XIAvHDVXT4fketNANK1yfP65MaehStsNqyd9wVxSeFqt2sAQK9Tm3ECuUu2FmjlENoUtmZRiB5KzhOz3LLonOKKdzG6CvXCMDFg0ZPFRQzJfUlw88PE0l4n
+      - MODE=pub
+    restart: unless-stopped
 
   mysql:
     image: 'mariadb'
@@ -143,6 +193,7 @@ services:
       bx:
         aliases:
           - php-fpm
+      default:
 
   nginx:
     build:
@@ -152,9 +203,9 @@ services:
         - CONTAINER_GID=${BX_CONTAINER_GID}
         - CONTAINER_USER=bx
         - CONTAINER_GROUP=bx
-    ports:
-      - ${BX_HTTP_PORT}:80
-      - ${BX_HTTPS_PORT}:443
+#    ports:
+#      - ${BX_HTTP_PORT}:80
+#      - ${BX_HTTPS_PORT}:443
     container_name: bx-nginx
     restart: always
     environment:
@@ -171,13 +222,21 @@ services:
       - ${BX_MODULES_PATH}:/media/bitrix/modules
       - ./var/www/.bx_temp/sitemanager:/home/bitrix/.bx_temp/sitemanager
     depends_on:
-      - sub
-      - pub
+      - push-server-sub
+      - push-server-pub
+      - traefik
     networks:
       bx:
         aliases:
           - nginx
           - ${BX_DEFAULT_HOST} #Для работы проверки сокета!!!
+      default:
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.nginx-dev1.rule=Host(`${BX_DEFAULT_HOST}`)"
+      - "traefik.http.services.nginx-dev1.loadbalancer.server.port=80"
+      #- "traefik.http.routers.nginx-dev1.tls=true"
+      - "traefik.docker.network=traefik-net"
 
 
   cronjobber:
@@ -196,6 +255,9 @@ services:
 
 
 networks:
+  default:
+    external:
+      name: traefik-net
   bx:
     driver: bridge
 
